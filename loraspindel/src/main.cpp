@@ -29,6 +29,24 @@ double GetTemp(void);
 byte batteryVoltageCompress (int batvoltage);
 byte temperatureCompress (double temperature);
 void UnusedPinsPullup();
+float GetThermTemperature();
+
+//Thermister constants and varables
+
+#define THERMPOWERPIN A1 // which pin powers voltage divider (turned off unless measuring)        
+#define THERMISTORPIN A0 // which analog pin to connect        
+#define THERMISTORNOMINAL 10500   // resistance at 25 degrees C   
+#define TEMPERATURENOMINAL 25   // temp. for nominal resistance (almost always 25 C)
+// how many samples to take and average, more takes longer
+// but is more 'smooth'
+#define NUMSAMPLES 1
+#define ACOEFFICIENT 0.8483803702e-3
+#define BCOEFFICIENT 2.572522990e-4
+#define CCOEFFICIENT 1.703807621e-7
+#define RESISTOR 10060  
+
+ 
+
 
 //varables
 const byte nodeID=2;//must be unique for each device
@@ -62,6 +80,14 @@ power_twi_disable(); // TWI (I2C)
 delay(500);
 
 UnusedPinsPullup();//set unused pined to INPUTPULLUP to save power
+
+
+pinMode(THERMPOWERPIN, OUTPUT);
+digitalWrite(THERMPOWERPIN, LOW);
+
+for (int i=1; i<1000;i++){
+DPRINT("therm temp ");DPRINTln(GetThermTemperature);
+delay(1000);}
 
 //LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
 
@@ -244,3 +270,23 @@ pinMode(16, OUTPUT); digitalWrite(16, LOW);
 
 
 }
+float GetThermTemperature(){
+digitalWrite(THERMPOWERPIN, HIGH);
+delay(1);
+float lnR;
+float ThermResistance;
+float ThermTemperature;
+float average =0;
+
+for (int i=0; i< NUMSAMPLES; i++){
+ThermResistance = RESISTOR / (1023/ digitalRead(THERMISTORPIN) -1);
+lnR = log(ThermResistance);
+ThermTemperature = 1 / (ACOEFFICIENT + BCOEFFICIENT * lnR + CCOEFFICIENT * lnR* lnR *lnR) - 273.15;
+average += ThermTemperature;
+}
+digitalWrite(THERMPOWERPIN, LOW);
+average /= NUMSAMPLES;
+return average;
+
+}
+
