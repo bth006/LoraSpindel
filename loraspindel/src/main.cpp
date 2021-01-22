@@ -5,7 +5,7 @@
 //LORA RA01 module SPI 11 12(MISO)  13      DIO0 2,   reset 9,  NSS 10,
 // not connected 0(rx) 1(Tx)   3 4 5 6 7 8    A4 A5 A6 A7 cap sensors 17 14 15 16
 
-//#define DEBUG   //If you comment this line, the DPRINT & DPRINTLN lines are defined as blank.
+#define DEBUG   //If you comment this line, the DPRINT & DPRINTLN lines are defined as blank.
 //test
 #ifdef DEBUG    //Macros are usually in all capital letters.
   #define DPRINT(...)    Serial.print(__VA_ARGS__)     //DPRINT is a macro, debug print
@@ -25,25 +25,26 @@
 
 //Function prototypes
 int readVcc(void);
-double GetTemp(void);
+double GetAtmel328Temp(void);
 byte batteryVoltageCompress (int batvoltage);
 byte temperatureCompress (double temperature);
 void UnusedPinsPullup();
 float GetThermTemperature();
+long GetThermADC();
 
 //Thermister constants and varables
 
-#define THERMPOWERPIN A1 // which pin powers voltage divider (turned off unless measuring)        
-#define THERMISTORPIN A0 // which analog pin to connect        
-#define THERMISTORNOMINAL 10500   // resistance at 25 degrees C   
+#define THERMPOWERPIN A3 // which pin powers voltage divider (turned off unless measuring)        
+#define THERMISTORPIN A2 // which analog pin to connect         
 #define TEMPERATURENOMINAL 25   // temp. for nominal resistance (almost always 25 C)
 // how many samples to take and average, more takes longer
 // but is more 'smooth'
-#define NUMSAMPLES 1
+#define NUMSAMPLES 10
 #define ACOEFFICIENT 0.8483803702e-3
 #define BCOEFFICIENT 2.572522990e-4
 #define CCOEFFICIENT 1.703807621e-7
 #define RESISTOR 10060  
+long ADCtherm;
 
  
 
@@ -60,9 +61,9 @@ struct payloadDataStruct{
   byte nodeID;
   byte rssi =0; //not used anymore
   byte voltage;
-  byte temperature;
-  byte capsensor1Lowbyte;
-  byte capsensor1Highbyte;
+  byte temperature;//atmel328 temperature
+  byte capsensor1Lowbyte;// therm ADC low
+  byte capsensor1Highbyte;// therm ADC high
   byte capsensor2Lowbyte;
   byte capsensor2Highbyte;
   byte capsensor3Lowbyte;
@@ -79,15 +80,19 @@ ACSR = B10000000;// Disable the analog comparator by setting the ACD bit (bit 7)
 power_twi_disable(); // TWI (I2C)
 delay(500);
 
-UnusedPinsPullup();//set unused pined to INPUTPULLUP to save power
+//UnusedPinsPullup();//set unused pined to INPUTPULLUP to save power
 
-
+Serial.begin(115200);//note if the main clock speed is slowed the baud will change
 pinMode(THERMPOWERPIN, OUTPUT);
 digitalWrite(THERMPOWERPIN, LOW);
+pinMode(THERMISTORPIN,INPUT);
 
-for (int i=1; i<1000;i++){
-DPRINT("therm temp ");DPRINTln(GetThermTemperature);
-delay(1000);}
+/*for (int i=1; i<1000;i++){
+DPRINT("therm temp ");DPRINTln(GetThermTemperature());
+delay(20);
+LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
+DPRINT("atmel temp ");DPRINTln(GetAtmel328Temp());
+}*/
 
 //LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
 
@@ -156,11 +161,19 @@ void loop()
   int battery= readVcc();
   DPRINT("batvoltage=");DPRINT(battery);
   txpayload.voltage=batteryVoltageCompress(battery);
-  txpayload.temperature=temperatureCompress(GetTemp());
+  txpayload.temperature=temperatureCompress(GetAtmel328Temp());
+  ADCtherm = GetThermADC();
+    if ((ADCtherm >=0) & (ADCtherm <= 65535)){
+    txpayload.capsensor1Lowbyte=(byte)(ADCtherm%256);
+    txpayload.capsensor1Highbyte=(byte)(ADCtherm>>8);
+    }
+    else {txpayload.capsensor1Lowbyte=0;txpayload.capsensor1Highbyte=0;}
+
   memcpy(tx_buf, &txpayload, sizeof(txpayload) );
   byte zize=sizeof(txpayload);
   DPRINT(" sizeof data = ");DPRINT(sizeof(txpayload));
-
+    DPRINT(" ADClow = ");DPRINT(txpayload.capsensor1Lowbyte);
+ DPRINT(" ADCHih= ");DPRINT(txpayload.capsensor1Highbyte);DPRINT(" ");
 //send packet
   rf95.send((uint8_t *)tx_buf, zize);
   delay(500);
@@ -171,7 +184,7 @@ void loop()
 }
 
 
-double GetTemp(void)
+double GetAtmel328Temp(void)
 {
   unsigned int wADC;
   double t;
@@ -263,30 +276,58 @@ pinMode(A5, OUTPUT); digitalWrite(A5, LOW);
 pinMode(A6, OUTPUT); digitalWrite(A6, LOW);
 pinMode(A7, OUTPUT); digitalWrite(A7, LOW);
 //cap sensors were 17 14 15 16
-pinMode(17, OUTPUT); digitalWrite(17, LOW);
+//pinMode(17, OUTPUT); digitalWrite(17, LOW);
 pinMode(14, OUTPUT); digitalWrite(14, LOW);
 pinMode(15, OUTPUT); digitalWrite(15, LOW);
-pinMode(16, OUTPUT); digitalWrite(16, LOW);
+//pinMode(16, OUTPUT); digitalWrite(16, LOW);
 
 
 }
+
+
 float GetThermTemperature(){
-digitalWrite(THERMPOWERPIN, HIGH);
-delay(1);
+RunningMedian ADCsamples = RunningMedian(20);
 float lnR;
 float ThermResistance;
 float ThermTemperature;
-float average =0;
+//float resistor = RESISTOR;
+float reading;
+digitalWrite(THERMPOWERPIN, HIGH);
+delay(1);
 
 for (int i=0; i< NUMSAMPLES; i++){
-ThermResistance = RESISTOR / (1023/ digitalRead(THERMISTORPIN) -1);
-lnR = log(ThermResistance);
-ThermTemperature = 1 / (ACOEFFICIENT + BCOEFFICIENT * lnR + CCOEFFICIENT * lnR* lnR *lnR) - 273.15;
-average += ThermTemperature;
+  reading = analogRead(THERMISTORPIN);
+  ADCsamples.add(reading);
+  //DPRINT("adc reading ");DPRINTln(reading);
+  delay(1);
 }
 digitalWrite(THERMPOWERPIN, LOW);
-average /= NUMSAMPLES;
-return average;
+
+ ThermResistance = (1023/ ADCsamples.getMedian()) -1;
+ ThermResistance = RESISTOR / ThermResistance;
+ lnR = log(ThermResistance);
+ ThermTemperature = 1 / (ACOEFFICIENT + BCOEFFICIENT * lnR + CCOEFFICIENT * lnR* lnR *lnR) - 273.15;
+ DPRINT("ThermResistance ");DPRINT(ThermResistance);DPRINT("   ");
+ DPRINT("last adc reading ");DPRINT(reading);DPRINT("   ");
+ DPRINT("median temp ");DPRINT(ThermTemperature);DPRINT("   ");
+ DPRINT("median lowest ");DPRINT(ADCsamples.getLowest());DPRINT("   ");
+return ThermTemperature;
 
 }
 
+long GetThermADC(){
+RunningMedian ADCsamples = RunningMedian(20);
+int reading;
+digitalWrite(THERMPOWERPIN, HIGH);
+delay(1);
+
+for (int i=0; i< NUMSAMPLES; i++){
+  reading = analogRead(THERMISTORPIN);
+  ADCsamples.add(reading);
+  //DPRINT("adc reading ");DPRINTln(reading);
+  delay(1);
+}
+digitalWrite(THERMPOWERPIN, LOW);
+return ADCsamples.getMedian();
+
+}
