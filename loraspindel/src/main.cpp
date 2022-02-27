@@ -55,7 +55,7 @@ void get6050TempSample();
 #define TEMPERATURENOMINAL 25   // temp. for nominal resistance (almost always 25 C)
 // how many samples to take and average, more takes longer
 // but is more 'smooth'
-#define NUMSAMPLES 10
+#define NUMSAMPLES 8 //was 10 
 #define ACOEFFICIENT 0.8483803702e-3
 #define BCOEFFICIENT 2.572522990e-4
 #define CCOEFFICIENT 1.703807621e-7
@@ -89,7 +89,7 @@ float Temperatur, Tilt; // , corrGravity;
 
 //varables
 const byte nodeID=2;//must be unique for each device
-const int sleepDivSixteen =36; //sleep time divided by 16 (seconds)  36=10minutes, 54=15minutes   was 8
+const int sleepDivSixteen =54; //sleep time divided by 16 (seconds)  36=10minutes, 54=15minutes   was 8 then 36
 RH_RF95 rf95(10, 2); // Select, interupt. Singleton instance of the radio driver
 static const RH_RF95::ModemConfig radiosetting = {
     BW_SETTING<<4 | CR_SETTING<<1 | ImplicitHeaderMode_SETTING,
@@ -104,13 +104,17 @@ struct payloadDataStruct{
   byte capsensor1Highbyte;// therm ADC high
   byte capsensor2Lowbyte;//tilt low byte
   byte capsensor2Highbyte;//tilt high byte
-  byte capsensor3Lowbyte;
-  byte capsensor3Highbyte;
+  byte capsensor3Lowbyte;//accel temperature low byte
+  byte capsensor3Highbyte;//accel temperature high byte
 }txpayload;
 byte tx_buf[sizeof(txpayload)] = {0};
 byte RSSI =0;
 long intTilt;
 //float tilt;
+long timerA;  // used for power calcs in development
+long timerB;  // used for power calcs in development
+
+
 //------------------------------------------------------------------------------
 void setup()
 {
@@ -162,9 +166,9 @@ DPRINTln("init ok");
 rf95.setModemConfig(RH_RF95::Bw125Cr48Sf4096);// BW =125kHz, CRC4/8, sf 4096
 delay(10);
 rf95.setModemRegisters(&radiosetting);//this is where we apply our custom settings from RadioSettings.h
-rf95.printRegisters(); //th
+rf95.printRegisters(); //th*/
 delay(500);
-UnusedPinsPullup();//set unused pined to INPUTPULLUP to save power
+//UnusedPinsPullup();//set unused pined to INPUTPULLUP to save power
 DPRINTln("sleep n setup");delay(50);
 LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
 DPRINTln("wake n setup");
@@ -173,22 +177,40 @@ Serial.print("PORTD=");Serial.println(PORTD,BIN);
 Serial.print("PORTB=");Serial.println(PORTB,BIN);
 Serial.print("PORTC=");Serial.println(PORTC,BIN);
 Serial.print("ADCSRA=");Serial.println(ADCSRA,BIN);
+delay(100);
 }
-
+ 
 //------------------------------------------------------------------------------
 void loop()
 {
   //put radio and Atmega to sleep
-  rf95.sleep();//FIFO data buffer is cleared when the device is put in SLEEP mode
+  Serial.print("Lora entering sleep "); 
+  rf95.sleep();
+  Serial.println("rf95.sleep");//FIFO data buffer is cleared when the device is put in SLEEP mode
   //therefore any acks destined for other devices should be cleared
-  delay(10);
-  DPRINT(" sleep");;DPRINT("  ");DPRINT(millis());delay(10);
+  
+  delay(1000);
+  //DPRINT(" aceel sleep just b4 cpu sleep: "); DPRINTln(accelgyro.getSleepEnabled());
+//pinMode(9, INPUT_PULLUP);
+//pinMode (9, INPUT);// if the reset pin is held high on the RA-01 it will somtimes draw hundreds of micro amps
+
+//pinMode(10, INPUT_PULLUP);//spi cs
+//pinMode (2, INPUT);
+//digitalWrite(13, LOW);//SCK
+//digitalWrite(15, LOW);//MOSI
+
+//power_twi_disable(); // TWI (I2C)
+  DPRINT(" sleep");DPRINT("  ");DPRINT(millis());delay(100);
   for (int i=0; i < sleepDivSixteen; i++){
   LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);//sleep atmega
   LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
+  rf95.sleep();// belt and braces
+  //accelgyro.setSleepEnabled(true);
   }
+//power_twi_enable();
+//pinMode(10, OUTPUT);//spi cs
  
-//pinMode (9, INPUT);// if the reset pin is held high on the RA-01 it will somtimes draw hundreds of micro amps
+
 //pinMode(12, INPUT_PULLUP);// mISO
 //digitalWrite(10, LOW);//Spi CHIP SELECT
   //digitalWrite(10, HIGH);//Spi CHIP SELECT
@@ -210,12 +232,36 @@ void loop()
     }
     else {txpayload.capsensor1Lowbyte=0;txpayload.capsensor1Highbyte=0;}
 ///Get tILT//////////////////////////////
+  
+  timerA = millis(); //testing use only
   initAccel();
-  float accTemp = accelgyro.getTemperature() / 340.00 + 36.53;
+int16_t acceltemperatureInt = accelgyro.getTemperature();
+
+  float accTemp = acceltemperatureInt / 340.00 + 36.53;
+  
+    if ((acceltemperatureInt >=-32768) & (acceltemperatureInt <= 32767)){
+    txpayload.capsensor3Lowbyte=(byte)(acceltemperatureInt%256);
+    txpayload.capsensor3Highbyte=(byte)(acceltemperatureInt>>8);
+    }
+    else {txpayload.capsensor3Lowbyte=0;txpayload.capsensor3Highbyte=0;}
+    DPRINT(" acetemperature  "); DPRINTln(acceltemperatureInt);
+    DPRINT(" acelow byte "); DPRINTln(txpayload.capsensor3Lowbyte);
+    DPRINT(" acehigh byte "); DPRINTln(txpayload.capsensor3Highbyte);
+ // for (int i=0; i < 10; i++){
+ //DPRINT(" aceel temperature: "); DPRINTln(accTemp);
+// accTemp = accelgyro.getTemperature() / 340.00 + 36.53; delay(200);}
+
+  
   //Tilt = getTilt();
   Tilt = (getTilt()+getTilt())/2;//th
+  Serial.print(" aceel sleep: "); 
+
+   DPRINT(" aceel sleep b4: "); DPRINTln(accelgyro.getSleepEnabled());
   accelgyro.setSleepEnabled(true);
+  DPRINT(" aceel sleep after: "); DPRINTln(accelgyro.getSleepEnabled());
   //Wire.end();// should turn off pullups
+timerB = millis(); //testing use only
+Serial.print("timersB-A ");  Serial.println(timerB-timerA); 
 
   DPRINT("x: ");  DPRINT(ax);  DPRINT(" y: ");  DPRINT(ay);  DPRINT(" z: ");  DPRINTln(az);
   DPRINT(F("Tilt: "));  DPRINTln(Tilt);
@@ -426,13 +472,17 @@ float calculateTilt()
   float _ax = ax;
   float _ay = ay;
   float _az = az;
+
+  if (ax == 0 && ay == 0 && az == 0)
+    return 0.f;
+
   return acos(_az / (sqrt(_ax * _ax + _ay * _ay + _az * _az))) * 180.0 / M_PI;
 }
 
 bool testAccel()
 {
   DPRINTln("Starting Acc Test ");
-  uint8_t res; //= Wire.status();
+  //uint8_t res; //= Wire.status();
   //if (res != I2C_OK)
     //DPRINTln(String(F("I2C ERROR: ")) + res);
 
